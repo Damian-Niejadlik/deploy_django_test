@@ -1,0 +1,275 @@
+{% load static %}
+{% load filters %}
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edytuj zdjęcie</title>
+
+    <link rel="stylesheet" href="{% static 'styles.css' %}">
+
+    <style>
+        .controls {
+            margin-bottom: 20px;
+        }
+
+        .canvas-container {
+            position: relative;
+        }
+
+        .sticker-btn img {
+            border: 1px solid #ccc;
+            margin-right: 5px;
+            cursor: pointer;
+            width: 50px;
+            height: 50px;
+        }
+
+        canvas {
+            border: 1px solid black;
+        }
+
+        .text-input {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Edytuj zdjęcie</h1>
+
+    <div class="controls">
+        <h3>Dodaj naklejki:</h3>
+        {% for sticker in stickers %}
+            <button class="sticker-btn" onclick="addSticker('{{ sticker.image }}')">
+                <img src="{{ sticker.image }}" alt="{{ sticker.image.name }}">
+            </button>
+        {% endfor %}
+    </div>
+
+    <div class="controls">
+        <input type="text" id="text-to-add" class="text-input" placeholder="Wpisz tekst">
+        <button onclick="addText()">Dodaj tekst</button>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" action="{% url 'save_edited_photo' username=request.user.username photo_id=photo.id %}">
+
+        {% csrf_token %}
+        <input type="hidden" id="edited-photo-data" name="edited_photo_data">
+        <button type="submit" id="save-btn">Zapisz zdjęcie</button>
+    </form>
+
+
+<script>
+    let canvas = document.getElementById('canvas');
+    let context = canvas.getContext('2d');
+    let draggedElement = null;
+    let resizingElement = null;
+    let resizeStart = { x: 0, y: 0 };
+    let photo = new Image();
+    let elements = [];
+
+    photo.src = "{{ photo.image.url }}";
+    photo.onload = function () {
+        canvas.width = photo.width;
+        canvas.height = photo.height;
+        context.drawImage(photo, 0, 0);
+    };
+
+    function addSticker(stickerUrl) {
+            console.log("Sticker URL przekazane do funkcji:", stickerUrl);
+
+            if (!stickerUrl) {
+                console.error("Sticker URL jest pusty!");
+                return;
+            }
+
+
+            if (!stickerUrl.startsWith("/media/")) {
+                stickerUrl = "/media/" + stickerUrl;
+            }
+
+            const regex = /\/stickers(?!\/)/;
+            stickerUrl = stickerUrl.replace(regex, '/stickers/');
+
+            console.log('Ścieżka naklejki po przetworzeniu:', stickerUrl);
+
+            const sticker = new Image();
+            sticker.src = stickerUrl;
+
+            sticker.onload = function() {
+                elements.push({
+                    type: 'sticker',
+                    image: sticker,
+                    x: 10,
+                    y: 10,
+                    width: sticker.width / 2,
+                    height: sticker.height / 2
+                });
+                redrawCanvas();
+            };
+
+            sticker.onerror = function() {
+                console.error('Nie udało się załadować obrazka:', stickerUrl);
+            };
+        }
+
+    function addText() {
+        const text = document.getElementById('text-to-add').value;
+        if (text.trim() !== '') {
+            elements.push({
+                type: 'text',
+                text: text,
+                x: 50,
+                y: 100,
+                fontSize: 20,
+                color: 'black',
+                isSelected: false
+            });
+            redrawCanvas();
+        }
+    }
+
+    function redrawCanvas() {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(photo, 0, 0);
+
+        elements.forEach((element) => {
+            if (element.type === 'sticker') {
+                context.drawImage(element.image, element.x, element.y, element.width, element.height);
+                if (element.isSelected) {
+                    drawResizeHandles(element);
+                }
+            } else if (element.type === 'text') {
+                context.font = `${element.fontSize}px Arial`;
+                context.fillStyle = element.color;
+                context.fillText(element.text, element.x, element.y);
+                if (element.isSelected) {
+                    drawResizeHandles(element);
+                }
+            }
+        });
+    }
+
+    function drawResizeHandles(element) {
+        const handleSize = 10;
+        context.strokeStyle = 'blue';
+        context.lineWidth = 2;
+        context.strokeRect(
+            element.x,
+            element.y - (element.type === 'text' ? element.fontSize : 0),
+            element.width || context.measureText(element.text).width,
+            element.height || element.fontSize
+        );
+
+        context.fillStyle = 'blue';
+        context.fillRect(
+            element.x + (element.width || context.measureText(element.text).width) - handleSize,
+            element.y - handleSize,
+            handleSize,
+            handleSize
+        );
+    }
+
+    canvas.addEventListener('mousedown', function (e) {
+        const mouseX = e.offsetX;
+        const mouseY = e.offsetY;
+
+        resizingElement = elements.find((element) => {
+            const handleSize = 10;
+            if (element.type === 'sticker') {
+                return mouseX > element.x + element.width - handleSize &&
+                    mouseX < element.x + element.width + handleSize &&
+                    mouseY > element.y + element.height - handleSize &&
+                    mouseY < element.y + element.height + handleSize;
+            } else if (element.type === 'text') {
+                const textWidth = context.measureText(element.text).width;
+                return mouseX > element.x + textWidth - handleSize &&
+                    mouseX < element.x + textWidth + handleSize &&
+                    mouseY > element.y - handleSize &&
+                    mouseY < element.y + handleSize;
+            }
+            return false;
+        });
+
+        if (!resizingElement) {
+            draggedElement = elements.find((element) => {
+                if (element.type === 'sticker') {
+                    return mouseX > element.x && mouseX < element.x + element.width &&
+                        mouseY > element.y && mouseY < element.y + element.height;
+                } else if (element.type === 'text') {
+                    return mouseX > element.x && mouseX < element.x + context.measureText(element.text).width &&
+                        mouseY > element.y - element.fontSize && mouseY < element.y;
+                }
+                return false;
+            });
+
+            elements.forEach(element => element.isSelected = false);
+
+            if (draggedElement) {
+                draggedElement.isSelected = true;
+            }
+        }
+
+        resizeStart = { x: mouseX, y: mouseY };
+        redrawCanvas();
+    });
+
+    canvas.addEventListener('mousemove', function (e) {
+        const mouseX = e.offsetX;
+        const mouseY = e.offsetY;
+
+        if (draggedElement) {
+            draggedElement.x = mouseX - (draggedElement.width / 2 || context.measureText(draggedElement.text).width / 2);
+            draggedElement.y = mouseY - (draggedElement.height / 2 || draggedElement.fontSize / 2);
+            redrawCanvas();
+        } else if (resizingElement) {
+            const dx = mouseX - resizeStart.x;
+            const dy = mouseY - resizeStart.y;
+
+            if (resizingElement.type === 'sticker') {
+                resizingElement.width += dx;
+                resizingElement.height += dy;
+            } else if (resizingElement.type === 'text') {
+                resizingElement.fontSize += dy / 5;
+            }
+
+            resizeStart = { x: mouseX, y: mouseY };
+            redrawCanvas();
+        }
+    });
+
+    canvas.addEventListener('mouseup', function () {
+        draggedElement = null;
+        resizingElement = null;
+    });
+
+    document.querySelector('form').addEventListener('submit', function (event) {
+        event.preventDefault();
+
+        const editedPhotoData = document.getElementById('edited-photo-data');
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(photo, 0, 0);
+
+        elements.forEach((element) => {
+            if (element.type === 'sticker') {
+                context.drawImage(element.image, element.x, element.y, element.width, element.height);
+            } else if (element.type === 'text') {
+                context.font = `${element.fontSize}px Arial`;
+                context.fillStyle = element.color;
+                context.fillText(element.text, element.x, element.y);
+            }
+        });
+
+        editedPhotoData.value = canvas.toDataURL('image/png');
+        event.target.submit();
+    });
+</script>
+
+
+</body>
+</html>
